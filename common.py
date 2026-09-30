@@ -1,0 +1,117 @@
+"""Общая часть обеих реализаций агента.
+
+Здесь всё, что НЕ зависит от провайдера: системный промпт, тестовые вопросы,
+логирование и выполнение инструмента. Благодаря этому разница между
+agent_anthropic.py и agent_openrouter.py содержит только то, что реально
+отличается у провайдеров: формат запроса и разбор ответа.
+"""
+
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import tools
+
+# Консоль Windows по умолчанию не в UTF-8 — без этого кириллица в print падает.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+MAX_TOKENS = 2048
+# Предохранитель: и от бесконечного цикла, и от расхода лимита.
+# 15: главный сценарий со сметой в 6 позиций + ловушка нуждается в ~11-13
+# оборотах — с 8 он обрывался за шаг до финального ответа.
+MAX_STEPS = int(os.getenv("MAX_STEPS", "15"))
+
+LOG_DIR = Path(__file__).parent / "logs"
+
+SYSTEM_PROMPT = """Ты — помощник-сметчик фрилансера, который делает сайты,
+интернет-магазины, веб-приложения, CRM, админ-панели и парсеры.
+Цены фиксированные: базовая цена за тип проекта плюс доплаты за отдельные модули.
+
+Правила работы:
+- Цены ты не знаешь и не угадываешь — каждую берёшь инструментом get_price.
+- Содержание брифа узнаёшь только инструментом read_brief.
+- Все арифметические расчёты делаешь инструментом calculate, а не в уме.
+- Если инструмент вернул ошибку, прочитай текст ошибки и исправься: уточни
+  аргументы или обойдись доступными данными. Если позиции нет в прайс-листе —
+  не выдумывай цену, а вынеси её в отдельный список «требует ручной оценки».
+- Финальный ответ: смета по позициям, итог, сверка с бюджетом клиента и,
+  если есть, список позиций вне прайса."""
+
+TEST_QUESTIONS = {
+    # 1. Многошаговая цепочка: файл -> несколько цен -> расчёты. Главный сценарий.
+    1: (
+        "Прочитай бриф brief_shop.txt и посчитай смету по прайс-листу. "
+        "Уложимся ли мы в бюджет клиента? Посчитай размер одного платежа, "
+        "если делить на 3 части."
+    ),
+    # 2. Выбор инструментов: пример из задания дословно.
+    2: "Посчитай 15% от 340, а потом скажи, тепло ли сейчас в Амстердаме.",
+    # 3. Обработка ошибок: несуществующая позиция и деление на ноль.
+    3: (
+        "Узнай цену позиции 'котик' и посчитай выражение '10 / 0'. "
+        "Потом всё равно скажи цену интернет-магазина."
+    ),
+}
+
+
+class Log:
+    """Пишет одновременно в консоль и в файл — файл потом несём преподавателю."""
+
+    def __init__(self, name: str):
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        self.path = LOG_DIR / f"{stamp}-{name}.md"
+        self.lines: list[str] = []
+
+    def __call__(self, text: str = "") -> None:
+        print(text)
+        self.lines.append(text)
+
+    def save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text("\n".join(self.lines) + "\n", encoding="utf-8")
+        print(f"\n[лог сохранён: {self.path}]")
+
+
+def run_tool(name: str, args: dict, log: Log) -> tuple[str, bool]:
+    """Выполняет инструмент и возвращает (текст_результата, это_ошибка).
+
+    Упасть нельзя: любая ошибка превращается в текст для модели, и модель
+    получает шанс исправиться на следующем витке цикла.
+    """
+    log(f"  -> вызов `{name}` с аргументами {args}")
+    func = tools.REGISTRY.get(name)
+    try:
+        if func is None:
+            raise tools.ToolError(f"инструмента {name!r} не существует")
+        output, is_error = func(**args), False
+    except tools.ToolError as exc:
+        output, is_error = f"Ошибка инструмента: {exc}", True
+    except TypeError as exc:
+        output, is_error = f"Ошибка инструмента: неверный набор аргументов — {exc}", True
+    except Exception as exc:  # непредвиденное: тоже не роняем процесс
+        output, is_error = f"Ошибка инструмента: {type(exc).__name__}: {exc}", True
+
+    marker = "ОШИБКА" if is_error else "ok"
+    preview = output if len(output) < 300 else output[:300] + " ...[обрезано]"
+    log(f"  <- {marker}: {preview}")
+    return output, is_error
+
+
+def pick_question(args: list[str]) -> tuple[str, str]:
+    """Разбирает аргументы командной строки -> (вопрос, имя_для_лога)."""
+    if len(args) == 2 and args[0] == "--test" and args[1].isdigit():
+        number = int(args[1])
+        if number not in TEST_QUESTIONS:
+            raise SystemExit(f"Сценарии: {', '.join(map(str, TEST_QUESTIONS))}")
+        return TEST_QUESTIONS[number], f"test{number}"
+    if args:
+        return " ".join(args), "custom"
+    raise SystemExit(
+        "Укажи вопрос или номер сценария:\n"
+        '  python agent_openrouter.py "Посчитай смету по brief_shop.txt"\n'
+        "  python agent_openrouter.py --test 1   # смета по брифу (главный)\n"
+        "  python agent_openrouter.py --test 2   # выбор инструментов\n"
+        "  python agent_openrouter.py --test 3   # обработка ошибок"
+    )

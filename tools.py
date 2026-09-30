@@ -35,19 +35,28 @@ def read_brief(filename: str) -> str:
 
 
 # --------------------------------------------------------------------------
-# 2. get_rate — ставка по роли из локального справочника
+# 2. get_price — цена позиции из прайс-листа (фикс за тип проекта + доплаты)
 # --------------------------------------------------------------------------
 
-def get_rate(role: str) -> str:
-    rates = json.loads((DATA_DIR / "rates.json").read_text(encoding="utf-8"))
-    key = role.strip().lower()
-    if key not in rates:
-        raise ToolError(
-            f"роль {role!r} отсутствует в справочнике ставок. "
-            f"Доступные роли: {', '.join(rates)}"
-        )
-    entry = rates[key]
-    return f"{key}: {entry['rate_rub_per_hour']} руб/час ({entry['note']})"
+def _load_pricelist() -> tuple[dict, dict]:
+    data = json.loads((DATA_DIR / "pricelist.json").read_text(encoding="utf-8"))
+    return data["base"], data["addons"]
+
+
+def get_price(item: str) -> str:
+    base, addons = _load_pricelist()
+    key = item.strip().lower()
+    for section, entries in (("базовый проект", base), ("доплата", addons)):
+        if key in entries:
+            entry = entries[key]
+            return (
+                f"{key} — {entry['price_rub']} руб ({section}: {entry['note']})"
+            )
+    raise ToolError(
+        f"позиции {item!r} нет в прайс-листе. "
+        f"Типы проектов: {', '.join(base)}. "
+        f"Доплаты: {', '.join(addons)}"
+    )
 
 
 # --------------------------------------------------------------------------
@@ -138,20 +147,26 @@ TOOL_SCHEMAS = [
         },
     },
     {
-        "name": "get_rate",
+        "name": "get_price",
         "description": (
-            "Получить внутреннюю часовую ставку по одной роли из справочника ставок студии. "
-            "Одна роль за один вызов. Никогда не придумывай ставки сам — всегда спрашивай здесь."
+            "Получить цену одной позиции из прайс-листа студии: либо базовую цену типа "
+            "проекта (лендинг, интернет-магазин, CRM, парсер и т.п.), либо стоимость "
+            "доплаты за отдельный модуль (интеграция с 1С, личный кабинет, платёжный "
+            "шлюз и т.п.). Одна позиция за один вызов. Никогда не придумывай цены сам — "
+            "всегда спрашивай здесь."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "role": {
+                "item": {
                     "type": "string",
-                    "description": "Название роли, например 'бэкенд', 'дизайнер', 'интеграции'",
+                    "description": (
+                        "Название позиции, например 'интернет-магазин', "
+                        "'интеграция с 1С', 'парсер'"
+                    ),
                 }
             },
-            "required": ["role"],
+            "required": ["item"],
         },
     },
     {
@@ -165,7 +180,7 @@ TOOL_SCHEMAS = [
             "properties": {
                 "expression": {
                     "type": "string",
-                    "description": "Выражение, например '140*3200 + 180*3500'",
+                    "description": "Выражение, например '600000 + 250000 + 150000' или '1370000 / 3'",
                 }
             },
             "required": ["expression"],
@@ -186,7 +201,7 @@ TOOL_SCHEMAS = [
 
 REGISTRY = {
     "read_brief": read_brief,
-    "get_rate": get_rate,
+    "get_price": get_price,
     "calculate": calculate,
     "get_weather": get_weather,
 }
