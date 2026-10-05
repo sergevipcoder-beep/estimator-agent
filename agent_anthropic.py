@@ -19,6 +19,7 @@ from dotenv import load_dotenv
 
 import tools
 from common import (
+    FINAL_STEP_NUDGE,
     MAX_STEPS,
     MAX_TOKENS,
     SYSTEM_PROMPT,
@@ -41,13 +42,20 @@ def run_agent(question: str, log: Log) -> str:
 
     for step in range(1, MAX_STEPS + 1):
         log(f"## Шаг {step}")
+        # На последнем шаге отбираем инструменты и просим итог: иначе модель
+        # уходит в лишние вызовы и цикл обрывается без финального ответа.
+        last_step = step == MAX_STEPS
+        if last_step:
+            log("  ! последний шаг: инструменты отключены, прошу финальный ответ")
+            messages.append({"role": "user", "content": FINAL_STEP_NUDGE})
         try:
             response = client.messages.create(
                 model=MODEL,
                 max_tokens=MAX_TOKENS,
                 system=SYSTEM_PROMPT,  # у Anthropic системный промпт — отдельный параметр,
-                tools=tools.TOOL_SCHEMAS,  # а схемы берутся как есть, без переупаковки
                 messages=messages,
+                # схемы берутся как есть, без переупаковки
+                **({} if last_step else {"tools": tools.TOOL_SCHEMAS}),
             )
         except anthropic.RateLimitError:
             log("\n# Остановка: исчерпан лимит запросов (429)")

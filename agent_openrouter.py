@@ -17,6 +17,7 @@ from dotenv import load_dotenv
 
 import tools
 from common import (
+    FINAL_STEP_NUDGE,
     MAX_STEPS,
     MAX_TOKENS,
     SYSTEM_PROMPT,
@@ -101,12 +102,18 @@ def run_agent(question: str, log: Log) -> str:
 
     for step in range(1, MAX_STEPS + 1):
         log(f"## Шаг {step}")
+        # На последнем шаге отбираем инструменты и просим итог: иначе модель
+        # уходит в лишние вызовы и цикл обрывается без финального ответа.
+        last_step = step == MAX_STEPS
+        if last_step:
+            log("  ! последний шаг: инструменты отключены, прошу финальный ответ")
+            messages.append({"role": "user", "content": FINAL_STEP_NUDGE})
         try:
             response = client.chat.completions.create(
                 model=MODEL,
                 max_tokens=MAX_TOKENS,
-                tools=openai_tool_schemas(),
                 messages=messages,
+                **({} if last_step else {"tools": openai_tool_schemas()}),
             )
         except openai.RateLimitError:
             log("\n# Остановка: исчерпан лимит запросов (429)")
