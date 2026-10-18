@@ -108,10 +108,20 @@ def main() -> None:
     if not args:
         raise SystemExit(__doc__)
 
-    questions = TEST_QUESTIONS if args[0] == "--test" else [" ".join(args)]
-    for question in questions:
-        answer(question)
-        print("\n" + "=" * 70 + "\n")
+    is_test = args[0] == "--test"
+    questions = TEST_QUESTIONS if is_test else [" ".join(args)]
+
+    # Лог пишем сами, а не перенаправлением вывода: иначе PowerShell сохранит
+    # его в кодировке консоли и кириллица превратится в кракозябры.
+    from common import Log
+
+    log = Log("rag-test-2.7" if is_test else "rag-query", timestamped=not is_test)
+    try:
+        for question in questions:
+            answer(question, log)
+            log("\n" + "=" * 70 + "\n")
+    finally:
+        log.save()
 
 
 if __name__ == "__main__":

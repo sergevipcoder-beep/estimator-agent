@@ -40,6 +40,7 @@ from llama_index.core.node_parser import SentenceSplitter
 from llama_index.embeddings.openai_like import OpenAILikeEmbedding
 from llama_index.llms.openai_like import OpenAILike
 
+from common import Log
 from rag.chunking import KNOWLEDGE_DIR
 from rag.search import SYSTEM_PROMPT, TEST_QUESTIONS, TOP_K
 
@@ -80,28 +81,38 @@ def main() -> None:
     args = sys.argv[1:]
     if not args:
         raise SystemExit(__doc__)
-    questions = TEST_QUESTIONS if args[0] == "--test" else [" ".join(args)]
+    is_test = args[0] == "--test"
+    questions = TEST_QUESTIONS if is_test else [" ".join(args)]
 
-    configure()
+    # Лог пишем сами, а не перенаправлением вывода: иначе PowerShell сохранит
+    # его в кодировке консоли и кириллица превратится в кракозябры.
+    log = Log(
+        "rag-llamaindex-test" if is_test else "rag-llamaindex-query",
+        timestamped=not is_test,
+    )
+    try:
+        configure()
 
-    # Вот здесь вся индексация: чтение, чанкинг, эмбеддинги, хранилище — 2 строки.
-    documents = SimpleDirectoryReader(str(KNOWLEDGE_DIR)).load_data()
-    index = VectorStoreIndex.from_documents(documents)
-    print(f"Документов прочитано: {len(documents)}")
-    print(f"Узлов в индексе: {len(index.docstore.docs)}")
-    print(f"Модель ответов: {CHAT_MODEL}\nМодель эмбеддингов: {EMBED_MODEL}\n")
+        # Вот здесь вся индексация: чтение, чанкинг, эмбеддинги, хранилище — 2 строки.
+        documents = SimpleDirectoryReader(str(KNOWLEDGE_DIR)).load_data()
+        index = VectorStoreIndex.from_documents(documents)
+        log(f"Документов прочитано: {len(documents)}")
+        log(f"Узлов в индексе: {len(index.docstore.docs)}")
+        log(f"Модель ответов: {CHAT_MODEL}\nМодель эмбеддингов: {EMBED_MODEL}\n")
 
-    engine = index.as_query_engine(similarity_top_k=TOP_K)
+        engine = index.as_query_engine(similarity_top_k=TOP_K)
 
-    for question in questions:
-        print(f"# Вопрос\n\n{question}\n")
-        response = engine.query(question)
-        print("## Источники")
-        for node in response.source_nodes:
-            name = node.metadata.get("file_name", "?")
-            print(f"  {node.score:.3f}  {name}")
-        print(f"\n## Ответ\n\n{response}")
-        print("\n" + "=" * 70 + "\n")
+        for question in questions:
+            log(f"# Вопрос\n\n{question}\n")
+            response = engine.query(question)
+            log("## Источники")
+            for node in response.source_nodes:
+                name = node.metadata.get("file_name", "?")
+                log(f"  {node.score:.3f}  {name}")
+            log(f"\n## Ответ\n\n{response}")
+            log("\n" + "=" * 70 + "\n")
+    finally:
+        log.save()
 
 
 if __name__ == "__main__":

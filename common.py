@@ -86,11 +86,19 @@ TEST_QUESTIONS = {
 
 
 class Log:
-    """Пишет одновременно в консоль и в файл — файл потом несём преподавателю."""
+    """Пишет одновременно в консоль и в файл — файл потом несём преподавателю.
 
-    def __init__(self, name: str):
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        self.path = LOG_DIR / f"{stamp}-{name}.md"
+    Файл всегда пишется в UTF-8. Это не перестраховка: логи RAG сначала
+    собирались перенаправлением вывода (`> файл.md`), и PowerShell сохранял их
+    в кодировке консоли — текст превращался в нечитаемое месиво.
+
+    timestamped=False — для прогонов, на которые ссылается REPORT.md по
+    постоянному имени: новый прогон перезаписывает файл, ссылка не ломается.
+    """
+
+    def __init__(self, name: str, timestamped: bool = True):
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-") if timestamped else ""
+        self.path = LOG_DIR / f"{stamp}{name}.md"
         self.lines: list[str] = []
 
     def __call__(self, text: str = "") -> None:
